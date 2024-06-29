@@ -342,6 +342,7 @@ and pattern_desc = Parsetree.pattern_desc =
           Note: [(module P : S)] is represented as
           [Ppat_constraint(Ppat_unpack(Some "P"), Ptyp_package S)] *)
   | Ppat_exception of pattern  (** Pattern [exception P] *)
+  | Ppat_effect of pattern * pattern  (** Pattern [effect P P] *)
   | Ppat_extension of extension  (** Pattern [[%id]] *)
   | Ppat_open of longident_loc * pattern  (** Pattern [M.(P)] *)
 
@@ -657,6 +658,25 @@ and extension_constructor_kind = Parsetree.extension_constructor_kind =
   | Pext_rebind of longident_loc
       (** [Pext_rebind(D)] re-export the constructor [D] with the new name [C] *)
 
+and effect_constructor = Parsetree.effect_constructor = {
+  peff_name : string loc;
+  peff_kind : effect_constructor_kind;
+  peff_loc : Location.t;
+  peff_attributes : attributes; (* C [@id1] [@id2] of ... *)
+}
+
+and effect_constructor_kind = Parsetree.effect_constructor_kind =
+  | Peff_decl of core_type list * core_type
+    (*
+      | C of T1 * ... * Tn     ([T1; ...; Tn], None)
+      | C: T0                  ([], Some T0)
+      | C: T1 * ... * Tn -> T0 ([T1; ...; Tn], Some T0)
+    *)
+  | Peff_rebind of Longident.t loc
+(*
+  | C = D
+*)
+
 (** {1 Class language} *)
 (** {2 Type expressions for the class language} *)
 
@@ -873,6 +893,7 @@ and signature_item_desc = Parsetree.signature_item_desc =
       (** [type t1 := ... and ... and tn := ...] *)
   | Psig_typext of type_extension  (** [type t1 += ...] *)
   | Psig_exception of type_exception  (** [exception C of T] *)
+  | Psig_effect of effect_constructor  (** effect C : T -> T *)
   | Psig_module of module_declaration  (** [module X = M] and [module X : MT] *)
   | Psig_modsubst of module_substitution  (** [module X := M] *)
   | Psig_recmodule of module_declaration list
@@ -986,6 +1007,7 @@ and module_expr_desc = Parsetree.module_expr_desc =
   | Pmod_functor of functor_parameter * module_expr
       (** [functor(X : MT1) -> ME] *)
   | Pmod_apply of module_expr * module_expr  (** [ME1(ME2)] *)
+  | Pmod_apply_unit of module_expr  (** [ME1()] *)
   | Pmod_constraint of module_expr * module_type  (** [(ME : MT)] *)
   | Pmod_unpack of expression  (** [(val E)] *)
   | Pmod_extension of extension  (** [[%id]] *)
@@ -1015,6 +1037,9 @@ and structure_item_desc = Parsetree.structure_item_desc =
   | Pstr_exception of type_exception
       (** - [exception C of T]
           - [exception C = M.X] *)
+  | Pstr_effect of effect_constructor
+      (** - [effect C : T -> T]
+          - [effect C = M.X] *)
   | Pstr_module of module_binding  (** [module X = ME] *)
   | Pstr_recmodule of module_binding list
       (** [module rec X1 = ME1 and ... and Xn = MEn] *)
@@ -1028,9 +1053,17 @@ and structure_item_desc = Parsetree.structure_item_desc =
   | Pstr_attribute of attribute  (** [[@@@id]] *)
   | Pstr_extension of extension * attributes  (** [[%%id]] *)
 
+and value_constraint = Parsetree.value_constraint =
+  | Pvc_constraint of {
+      locally_abstract_univars : string loc list;
+      typ : core_type;
+    }
+  | Pvc_coercion of { ground : core_type option; coercion : core_type }
+
 and value_binding = Parsetree.value_binding = {
   pvb_pat : pattern;
   pvb_expr : expression;
+  pvb_constraint : value_constraint option;
   pvb_attributes : attributes;
   pvb_loc : location;
 }
@@ -1378,6 +1411,10 @@ class virtual map =
         | Ppat_exception a ->
             let a = self#pattern a in
             Ppat_exception a
+        | Ppat_effect (a, b) ->
+            let a = self#pattern a in
+            let b = self#pattern b in
+            Ppat_effect (a, b)
         | Ppat_extension a ->
             let a = self#extension a in
             Ppat_extension a
@@ -1756,6 +1793,26 @@ class virtual map =
             let a = self#longident_loc a in
             Pext_rebind a
 
+    method effect_constructor : effect_constructor -> effect_constructor =
+      fun { peff_name; peff_kind; peff_loc; peff_attributes } ->
+        let peff_name = self#loc self#string peff_name in
+        let peff_kind = self#effect_constructor_kind peff_kind in
+        let peff_loc = self#location peff_loc in
+        let peff_attributes = self#attributes peff_attributes in
+        { peff_name; peff_kind; peff_loc; peff_attributes }
+
+    method effect_constructor_kind
+        : effect_constructor_kind -> effect_constructor_kind =
+      fun x ->
+        match x with
+        | Peff_decl (a, b) ->
+            let a = self#list self#core_type a in
+            let b = self#core_type b in
+            Peff_decl (a, b)
+        | Peff_rebind a ->
+            let a = self#longident_loc a in
+            Peff_rebind a
+
     method class_type : class_type -> class_type =
       fun { pcty_desc; pcty_loc; pcty_attributes } ->
         let pcty_desc = self#class_type_desc pcty_desc in
@@ -2070,6 +2127,9 @@ class virtual map =
         | Psig_exception a ->
             let a = self#type_exception a in
             Psig_exception a
+        | Psig_effect a ->
+            let a = self#effect_constructor a in
+            Psig_effect a
         | Psig_module a ->
             let a = self#module_declaration a in
             Psig_module a
@@ -2210,6 +2270,9 @@ class virtual map =
             let a = self#module_expr a in
             let b = self#module_expr b in
             Pmod_apply (a, b)
+        | Pmod_apply_unit a ->
+            let a = self#module_expr a in
+            Pmod_apply_unit a
         | Pmod_constraint (a, b) ->
             let a = self#module_expr a in
             let b = self#module_type b in
@@ -2253,6 +2316,9 @@ class virtual map =
         | Pstr_exception a ->
             let a = self#type_exception a in
             Pstr_exception a
+        | Pstr_effect a ->
+            let a = self#effect_constructor a in
+            Pstr_effect a
         | Pstr_module a ->
             let a = self#module_binding a in
             Pstr_module a
@@ -2282,13 +2348,28 @@ class virtual map =
             let b = self#attributes b in
             Pstr_extension (a, b)
 
+    method value_constraint : value_constraint -> value_constraint =
+      fun x ->
+        match x with
+        | Pvc_constraint { locally_abstract_univars; typ } ->
+            let locally_abstract_univars =
+              self#list (self#loc self#string) locally_abstract_univars
+            in
+            let typ = self#core_type typ in
+            Pvc_constraint { locally_abstract_univars; typ }
+        | Pvc_coercion { ground; coercion } ->
+            let ground = self#option self#core_type ground in
+            let coercion = self#core_type coercion in
+            Pvc_coercion { ground; coercion }
+
     method value_binding : value_binding -> value_binding =
-      fun { pvb_pat; pvb_expr; pvb_attributes; pvb_loc } ->
+      fun { pvb_pat; pvb_expr; pvb_constraint; pvb_attributes; pvb_loc } ->
         let pvb_pat = self#pattern pvb_pat in
         let pvb_expr = self#expression pvb_expr in
+        let pvb_constraint = self#option self#value_constraint pvb_constraint in
         let pvb_attributes = self#attributes pvb_attributes in
         let pvb_loc = self#location pvb_loc in
-        { pvb_pat; pvb_expr; pvb_attributes; pvb_loc }
+        { pvb_pat; pvb_expr; pvb_constraint; pvb_attributes; pvb_loc }
 
     method module_binding : module_binding -> module_binding =
       fun { pmb_name; pmb_expr; pmb_attributes; pmb_loc } ->
@@ -2565,6 +2646,9 @@ class virtual iter =
         | Ppat_lazy a -> self#pattern a
         | Ppat_unpack a -> self#loc (self#option self#string) a
         | Ppat_exception a -> self#pattern a
+        | Ppat_effect (a, b) ->
+            self#pattern a;
+            self#pattern b
         | Ppat_extension a -> self#extension a
         | Ppat_open (a, b) ->
             self#longident_loc a;
@@ -2822,6 +2906,21 @@ class virtual iter =
             self#option self#core_type c
         | Pext_rebind a -> self#longident_loc a
 
+    method effect_constructor : effect_constructor -> unit =
+      fun { peff_name; peff_kind; peff_loc; peff_attributes } ->
+        self#loc self#string peff_name;
+        self#effect_constructor_kind peff_kind;
+        self#location peff_loc;
+        self#attributes peff_attributes
+
+    method effect_constructor_kind : effect_constructor_kind -> unit =
+      fun x ->
+        match x with
+        | Peff_decl (a, b) ->
+            self#list self#core_type a;
+            self#core_type b
+        | Peff_rebind a -> self#longident_loc a
+
     method class_type : class_type -> unit =
       fun { pcty_desc; pcty_loc; pcty_attributes } ->
         self#class_type_desc pcty_desc;
@@ -3037,6 +3136,7 @@ class virtual iter =
         | Psig_typesubst a -> self#list self#type_declaration a
         | Psig_typext a -> self#type_extension a
         | Psig_exception a -> self#type_exception a
+        | Psig_effect a -> self#effect_constructor a
         | Psig_module a -> self#module_declaration a
         | Psig_modsubst a -> self#module_substitution a
         | Psig_recmodule a -> self#list self#module_declaration a
@@ -3136,6 +3236,7 @@ class virtual iter =
         | Pmod_apply (a, b) ->
             self#module_expr a;
             self#module_expr b
+        | Pmod_apply_unit a -> self#module_expr a
         | Pmod_constraint (a, b) ->
             self#module_expr a;
             self#module_type b
@@ -3164,6 +3265,7 @@ class virtual iter =
             self#list self#type_declaration b
         | Pstr_typext a -> self#type_extension a
         | Pstr_exception a -> self#type_exception a
+        | Pstr_effect a -> self#effect_constructor a
         | Pstr_module a -> self#module_binding a
         | Pstr_recmodule a -> self#list self#module_binding a
         | Pstr_modtype a -> self#module_type_declaration a
@@ -3490,6 +3592,10 @@ class virtual ['acc] fold =
         | Ppat_lazy a -> self#pattern a acc
         | Ppat_unpack a -> self#loc (self#option self#string) a acc
         | Ppat_exception a -> self#pattern a acc
+        | Ppat_effect (a, b) ->
+            let acc = self#pattern a acc in
+            let acc = self#pattern b acc in
+            acc
         | Ppat_extension a -> self#extension a acc
         | Ppat_open (a, b) ->
             let acc = self#longident_loc a acc in
@@ -3808,6 +3914,25 @@ class virtual ['acc] fold =
             acc
         | Pext_rebind a -> self#longident_loc a acc
 
+    method effect_constructor : effect_constructor -> 'acc -> 'acc =
+      fun { peff_name; peff_kind; peff_loc; peff_attributes } acc ->
+        let acc = self#loc self#string peff_name acc in
+        let acc = self#effect_constructor_kind peff_kind acc in
+        let acc = self#location peff_loc acc in
+        let acc = self#attributes peff_attributes acc in
+        acc
+
+    method effect_constructor_kind : effect_constructor_kind -> 'acc -> 'acc =
+      fun x acc ->
+        match x with
+        | Peff_decl (a, b) ->
+            let acc = self#list self#core_type a acc in
+            let acc = self#core_type b acc in
+            acc
+        | Peff_rebind a ->
+            let acc = self#longident_loc a acc in
+            acc
+
     method class_type : class_type -> 'acc -> 'acc =
       fun { pcty_desc; pcty_loc; pcty_attributes } acc ->
         let acc = self#class_type_desc pcty_desc acc in
@@ -4064,6 +4189,7 @@ class virtual ['acc] fold =
         | Psig_typesubst a -> self#list self#type_declaration a acc
         | Psig_typext a -> self#type_extension a acc
         | Psig_exception a -> self#type_exception a acc
+        | Psig_effect a -> self#effect_constructor a acc
         | Psig_module a -> self#module_declaration a acc
         | Psig_modsubst a -> self#module_substitution a acc
         | Psig_recmodule a -> self#list self#module_declaration a acc
@@ -4180,6 +4306,9 @@ class virtual ['acc] fold =
             let acc = self#module_expr a acc in
             let acc = self#module_expr b acc in
             acc
+        | Pmod_apply_unit a ->
+            let acc = self#module_expr a acc in
+            acc
         | Pmod_constraint (a, b) ->
             let acc = self#module_expr a acc in
             let acc = self#module_type b acc in
@@ -4213,6 +4342,7 @@ class virtual ['acc] fold =
             acc
         | Pstr_typext a -> self#type_extension a acc
         | Pstr_exception a -> self#type_exception a acc
+        | Pstr_effect a -> self#effect_constructor a acc
         | Pstr_module a -> self#module_binding a acc
         | Pstr_recmodule a -> self#list self#module_binding a acc
         | Pstr_modtype a -> self#module_type_declaration a acc
@@ -4607,6 +4737,10 @@ class virtual ['acc] fold_map =
         | Ppat_exception a ->
             let a, acc = self#pattern a acc in
             (Ppat_exception a, acc)
+        | Ppat_effect (a, b) ->
+            let a, acc = self#pattern a acc in
+            let b, acc = self#pattern b acc in
+            (Ppat_effect (a, b), acc)
         | Ppat_extension a ->
             let a, acc = self#extension a acc in
             (Ppat_extension a, acc)
@@ -4994,6 +5128,27 @@ class virtual ['acc] fold_map =
             let a, acc = self#longident_loc a acc in
             (Pext_rebind a, acc)
 
+    method effect_constructor
+        : effect_constructor -> 'acc -> effect_constructor * 'acc =
+      fun { peff_name; peff_kind; peff_loc; peff_attributes } acc ->
+        let peff_name, acc = self#loc self#string peff_name acc in
+        let peff_kind, acc = self#effect_constructor_kind peff_kind acc in
+        let peff_loc, acc = self#location peff_loc acc in
+        let peff_attributes, acc = self#attributes peff_attributes acc in
+        ({ peff_name; peff_kind; peff_loc; peff_attributes }, acc)
+
+    method effect_constructor_kind
+        : effect_constructor_kind -> 'acc -> effect_constructor_kind * 'acc =
+      fun x acc ->
+        match x with
+        | Peff_decl (a, b) ->
+            let a, acc = self#list self#core_type a acc in
+            let b, acc = self#core_type b acc in
+            (Peff_decl (a, b), acc)
+        | Peff_rebind a ->
+            let a, acc = self#longident_loc a acc in
+            (Peff_rebind a, acc)
+
     method class_type : class_type -> 'acc -> class_type * 'acc =
       fun { pcty_desc; pcty_loc; pcty_attributes } acc ->
         let pcty_desc, acc = self#class_type_desc pcty_desc acc in
@@ -5326,6 +5481,9 @@ class virtual ['acc] fold_map =
         | Psig_exception a ->
             let a, acc = self#type_exception a acc in
             (Psig_exception a, acc)
+        | Psig_effect a ->
+            let a, acc = self#effect_constructor a acc in
+            (Psig_effect a, acc)
         | Psig_module a ->
             let a, acc = self#module_declaration a acc in
             (Psig_module a, acc)
@@ -5482,6 +5640,9 @@ class virtual ['acc] fold_map =
             let a, acc = self#module_expr a acc in
             let b, acc = self#module_expr b acc in
             (Pmod_apply (a, b), acc)
+        | Pmod_apply_unit a ->
+            let a, acc = self#module_expr a acc in
+            (Pmod_apply_unit a, acc)
         | Pmod_constraint (a, b) ->
             let a, acc = self#module_expr a acc in
             let b, acc = self#module_type b acc in
@@ -5527,6 +5688,9 @@ class virtual ['acc] fold_map =
         | Pstr_exception a ->
             let a, acc = self#type_exception a acc in
             (Pstr_exception a, acc)
+        | Pstr_effect a ->
+            let a, acc = self#effect_constructor a acc in
+            (Pstr_effect a, acc)
         | Pstr_module a ->
             let a, acc = self#module_binding a acc in
             (Pstr_module a, acc)
@@ -5556,13 +5720,31 @@ class virtual ['acc] fold_map =
             let b, acc = self#attributes b acc in
             (Pstr_extension (a, b), acc)
 
+    method value_constraint
+        : value_constraint -> 'acc -> value_constraint * 'acc =
+      fun x acc ->
+        match x with
+        | Pvc_constraint { locally_abstract_univars; typ } ->
+            let locally_abstract_univars, acc =
+              self#list (self#loc self#string) locally_abstract_univars acc
+            in
+            let typ, acc = self#core_type typ acc in
+            (Pvc_constraint { locally_abstract_univars; typ }, acc)
+        | Pvc_coercion { ground; coercion } ->
+            let ground, acc = self#option self#core_type ground acc in
+            let coercion, acc = self#core_type coercion acc in
+            (Pvc_coercion { ground; coercion }, acc)
+
     method value_binding : value_binding -> 'acc -> value_binding * 'acc =
-      fun { pvb_pat; pvb_expr; pvb_attributes; pvb_loc } acc ->
+      fun { pvb_pat; pvb_expr; pvb_constraint; pvb_attributes; pvb_loc } acc ->
         let pvb_pat, acc = self#pattern pvb_pat acc in
         let pvb_expr, acc = self#expression pvb_expr acc in
+        let pvb_constraint, acc =
+          self#option self#value_constraint pvb_constraint acc
+        in
         let pvb_attributes, acc = self#attributes pvb_attributes acc in
         let pvb_loc, acc = self#location pvb_loc acc in
-        ({ pvb_pat; pvb_expr; pvb_attributes; pvb_loc }, acc)
+        ({ pvb_pat; pvb_expr; pvb_constraint; pvb_attributes; pvb_loc }, acc)
 
     method module_binding : module_binding -> 'acc -> module_binding * 'acc =
       fun { pmb_name; pmb_expr; pmb_attributes; pmb_loc } acc ->
@@ -5937,6 +6119,10 @@ class virtual ['ctx] map_with_context =
         | Ppat_exception a ->
             let a = self#pattern ctx a in
             Ppat_exception a
+        | Ppat_effect (a, b) ->
+            let a = self#pattern ctx a in
+            let b = self#pattern ctx b in
+            Ppat_effect (a, b)
         | Ppat_extension a ->
             let a = self#extension ctx a in
             Ppat_extension a
@@ -6317,6 +6503,27 @@ class virtual ['ctx] map_with_context =
             let a = self#longident_loc ctx a in
             Pext_rebind a
 
+    method effect_constructor : 'ctx -> effect_constructor -> effect_constructor
+        =
+      fun ctx { peff_name; peff_kind; peff_loc; peff_attributes } ->
+        let peff_name = self#loc self#string ctx peff_name in
+        let peff_kind = self#effect_constructor_kind ctx peff_kind in
+        let peff_loc = self#location ctx peff_loc in
+        let peff_attributes = self#attributes ctx peff_attributes in
+        { peff_name; peff_kind; peff_loc; peff_attributes }
+
+    method effect_constructor_kind
+        : 'ctx -> effect_constructor_kind -> effect_constructor_kind =
+      fun ctx x ->
+        match x with
+        | Peff_decl (a, b) ->
+            let a = self#list self#core_type ctx a in
+            let b = self#core_type ctx b in
+            Peff_decl (a, b)
+        | Peff_rebind a ->
+            let a = self#longident_loc ctx a in
+            Peff_rebind a
+
     method class_type : 'ctx -> class_type -> class_type =
       fun ctx { pcty_desc; pcty_loc; pcty_attributes } ->
         let pcty_desc = self#class_type_desc ctx pcty_desc in
@@ -6634,6 +6841,9 @@ class virtual ['ctx] map_with_context =
         | Psig_exception a ->
             let a = self#type_exception ctx a in
             Psig_exception a
+        | Psig_effect a ->
+            let a = self#effect_constructor ctx a in
+            Psig_effect a
         | Psig_module a ->
             let a = self#module_declaration ctx a in
             Psig_module a
@@ -6780,6 +6990,9 @@ class virtual ['ctx] map_with_context =
             let a = self#module_expr ctx a in
             let b = self#module_expr ctx b in
             Pmod_apply (a, b)
+        | Pmod_apply_unit a ->
+            let a = self#module_expr ctx a in
+            Pmod_apply_unit a
         | Pmod_constraint (a, b) ->
             let a = self#module_expr ctx a in
             let b = self#module_type ctx b in
@@ -6825,6 +7038,9 @@ class virtual ['ctx] map_with_context =
         | Pstr_exception a ->
             let a = self#type_exception ctx a in
             Pstr_exception a
+        | Pstr_effect a ->
+            let a = self#effect_constructor ctx a in
+            Pstr_effect a
         | Pstr_module a ->
             let a = self#module_binding ctx a in
             Pstr_module a
@@ -6854,13 +7070,30 @@ class virtual ['ctx] map_with_context =
             let b = self#attributes ctx b in
             Pstr_extension (a, b)
 
+    method value_constraint : 'ctx -> value_constraint -> value_constraint =
+      fun ctx x ->
+        match x with
+        | Pvc_constraint { locally_abstract_univars; typ } ->
+            let locally_abstract_univars =
+              self#list (self#loc self#string) ctx locally_abstract_univars
+            in
+            let typ = self#core_type ctx typ in
+            Pvc_constraint { locally_abstract_univars; typ }
+        | Pvc_coercion { ground; coercion } ->
+            let ground = self#option self#core_type ctx ground in
+            let coercion = self#core_type ctx coercion in
+            Pvc_coercion { ground; coercion }
+
     method value_binding : 'ctx -> value_binding -> value_binding =
-      fun ctx { pvb_pat; pvb_expr; pvb_attributes; pvb_loc } ->
+      fun ctx { pvb_pat; pvb_expr; pvb_constraint; pvb_attributes; pvb_loc } ->
         let pvb_pat = self#pattern ctx pvb_pat in
         let pvb_expr = self#expression ctx pvb_expr in
+        let pvb_constraint =
+          self#option self#value_constraint ctx pvb_constraint
+        in
         let pvb_attributes = self#attributes ctx pvb_attributes in
         let pvb_loc = self#location ctx pvb_loc in
-        { pvb_pat; pvb_expr; pvb_attributes; pvb_loc }
+        { pvb_pat; pvb_expr; pvb_constraint; pvb_attributes; pvb_loc }
 
     method module_binding : 'ctx -> module_binding -> module_binding =
       fun ctx { pmb_name; pmb_expr; pmb_attributes; pmb_loc } ->
@@ -7309,6 +7542,10 @@ class virtual ['res] lift =
         | Ppat_exception a ->
             let a = self#pattern a in
             self#constr "Ppat_exception" [ a ]
+        | Ppat_effect (a, b) ->
+            let a = self#pattern a in
+            let b = self#pattern b in
+            self#constr "Ppat_effect" [ a; b ]
         | Ppat_extension a ->
             let a = self#extension a in
             self#constr "Ppat_extension" [ a ]
@@ -7731,6 +7968,31 @@ class virtual ['res] lift =
             let a = self#longident_loc a in
             self#constr "Pext_rebind" [ a ]
 
+    method effect_constructor : effect_constructor -> 'res =
+      fun { peff_name; peff_kind; peff_loc; peff_attributes } ->
+        let peff_name = self#loc self#string peff_name in
+        let peff_kind = self#effect_constructor_kind peff_kind in
+        let peff_loc = self#location peff_loc in
+        let peff_attributes = self#attributes peff_attributes in
+        self#record
+          [
+            ("peff_name", peff_name);
+            ("peff_kind", peff_kind);
+            ("peff_loc", peff_loc);
+            ("peff_attributes", peff_attributes);
+          ]
+
+    method effect_constructor_kind : effect_constructor_kind -> 'res =
+      fun x ->
+        match x with
+        | Peff_decl (a, b) ->
+            let a = self#list self#core_type a in
+            let b = self#core_type b in
+            self#constr "Peff_decl" [ a; b ]
+        | Peff_rebind a ->
+            let a = self#longident_loc a in
+            self#constr "Peff_rebind" [ a ]
+
     method class_type : class_type -> 'res =
       fun { pcty_desc; pcty_loc; pcty_attributes } ->
         let pcty_desc = self#class_type_desc pcty_desc in
@@ -8078,6 +8340,9 @@ class virtual ['res] lift =
         | Psig_exception a ->
             let a = self#type_exception a in
             self#constr "Psig_exception" [ a ]
+        | Psig_effect a ->
+            let a = self#effect_constructor a in
+            self#constr "Psig_effect" [ a ]
         | Psig_module a ->
             let a = self#module_declaration a in
             self#constr "Psig_module" [ a ]
@@ -8250,6 +8515,9 @@ class virtual ['res] lift =
             let a = self#module_expr a in
             let b = self#module_expr b in
             self#constr "Pmod_apply" [ a; b ]
+        | Pmod_apply_unit a ->
+            let a = self#module_expr a in
+            self#constr "Pmod_apply_unit" [ a ]
         | Pmod_constraint (a, b) ->
             let a = self#module_expr a in
             let b = self#module_type b in
@@ -8293,6 +8561,9 @@ class virtual ['res] lift =
         | Pstr_exception a ->
             let a = self#type_exception a in
             self#constr "Pstr_exception" [ a ]
+        | Pstr_effect a ->
+            let a = self#effect_constructor a in
+            self#constr "Pstr_effect" [ a ]
         | Pstr_module a ->
             let a = self#module_binding a in
             self#constr "Pstr_module" [ a ]
@@ -8863,6 +9134,11 @@ class virtual ['ctx, 'res] lift_map_with_context =
             let a = self#pattern ctx a in
             ( Ppat_exception (Stdlib.fst a),
               self#constr ctx "Ppat_exception" [ Stdlib.snd a ] )
+        | Ppat_effect (a, b) ->
+            let a = self#pattern ctx a in
+            let b = self#pattern ctx b in
+            ( Ppat_effect (Stdlib.fst a, Stdlib.fst b),
+              self#constr ctx "Ppat_effect" [ Stdlib.snd a; Stdlib.snd b ] )
         | Ppat_extension a ->
             let a = self#extension ctx a in
             ( Ppat_extension (Stdlib.fst a),
@@ -9453,6 +9729,41 @@ class virtual ['ctx, 'res] lift_map_with_context =
             ( Pext_rebind (Stdlib.fst a),
               self#constr ctx "Pext_rebind" [ Stdlib.snd a ] )
 
+    method effect_constructor
+        : 'ctx -> effect_constructor -> effect_constructor * 'res =
+      fun ctx { peff_name; peff_kind; peff_loc; peff_attributes } ->
+        let peff_name = self#loc self#string ctx peff_name in
+        let peff_kind = self#effect_constructor_kind ctx peff_kind in
+        let peff_loc = self#location ctx peff_loc in
+        let peff_attributes = self#attributes ctx peff_attributes in
+        ( {
+            peff_name = Stdlib.fst peff_name;
+            peff_kind = Stdlib.fst peff_kind;
+            peff_loc = Stdlib.fst peff_loc;
+            peff_attributes = Stdlib.fst peff_attributes;
+          },
+          self#record ctx
+            [
+              ("peff_name", Stdlib.snd peff_name);
+              ("peff_kind", Stdlib.snd peff_kind);
+              ("peff_loc", Stdlib.snd peff_loc);
+              ("peff_attributes", Stdlib.snd peff_attributes);
+            ] )
+
+    method effect_constructor_kind
+        : 'ctx -> effect_constructor_kind -> effect_constructor_kind * 'res =
+      fun ctx x ->
+        match x with
+        | Peff_decl (a, b) ->
+            let a = self#list self#core_type ctx a in
+            let b = self#core_type ctx b in
+            ( Peff_decl (Stdlib.fst a, Stdlib.fst b),
+              self#constr ctx "Peff_decl" [ Stdlib.snd a; Stdlib.snd b ] )
+        | Peff_rebind a ->
+            let a = self#longident_loc ctx a in
+            ( Peff_rebind (Stdlib.fst a),
+              self#constr ctx "Peff_rebind" [ Stdlib.snd a ] )
+
     method class_type : 'ctx -> class_type -> class_type * 'res =
       fun ctx { pcty_desc; pcty_loc; pcty_attributes } ->
         let pcty_desc = self#class_type_desc ctx pcty_desc in
@@ -9925,6 +10236,10 @@ class virtual ['ctx, 'res] lift_map_with_context =
             let a = self#type_exception ctx a in
             ( Psig_exception (Stdlib.fst a),
               self#constr ctx "Psig_exception" [ Stdlib.snd a ] )
+        | Psig_effect a ->
+            let a = self#effect_constructor ctx a in
+            ( Psig_effect (Stdlib.fst a),
+              self#constr ctx "Psig_effect" [ Stdlib.snd a ] )
         | Psig_module a ->
             let a = self#module_declaration ctx a in
             ( Psig_module (Stdlib.fst a),
@@ -10172,6 +10487,10 @@ class virtual ['ctx, 'res] lift_map_with_context =
             let b = self#module_expr ctx b in
             ( Pmod_apply (Stdlib.fst a, Stdlib.fst b),
               self#constr ctx "Pmod_apply" [ Stdlib.snd a; Stdlib.snd b ] )
+        | Pmod_apply_unit a ->
+            let a = self#module_expr ctx a in
+            ( Pmod_apply_unit (Stdlib.fst a),
+              self#constr ctx "Pmod_apply_unit" [ Stdlib.snd a ] )
         | Pmod_constraint (a, b) ->
             let a = self#module_expr ctx a in
             let b = self#module_type ctx b in
@@ -10232,6 +10551,10 @@ class virtual ['ctx, 'res] lift_map_with_context =
             let a = self#type_exception ctx a in
             ( Pstr_exception (Stdlib.fst a),
               self#constr ctx "Pstr_exception" [ Stdlib.snd a ] )
+        | Pstr_effect a ->
+            let a = self#effect_constructor ctx a in
+            ( Pstr_effect (Stdlib.fst a),
+              self#constr ctx "Pstr_effect" [ Stdlib.snd a ] )
         | Pstr_module a ->
             let a = self#module_binding ctx a in
             ( Pstr_module (Stdlib.fst a),
@@ -10270,15 +10593,50 @@ class virtual ['ctx, 'res] lift_map_with_context =
             ( Pstr_extension (Stdlib.fst a, Stdlib.fst b),
               self#constr ctx "Pstr_extension" [ Stdlib.snd a; Stdlib.snd b ] )
 
+    method value_constraint
+        : 'ctx -> value_constraint -> value_constraint * 'res =
+      fun ctx x ->
+        match x with
+        | Pvc_constraint { locally_abstract_univars; typ } ->
+            let locally_abstract_univars =
+              self#list (self#loc self#string) ctx locally_abstract_univars
+            in
+            let typ = self#core_type ctx typ in
+            ( Pvc_constraint
+                {
+                  locally_abstract_univars = Stdlib.fst locally_abstract_univars;
+                  typ = Stdlib.fst typ;
+                },
+              self#record ctx
+                [
+                  ( "locally_abstract_univars",
+                    Stdlib.snd locally_abstract_univars );
+                  ("typ", Stdlib.snd typ);
+                ] )
+        | Pvc_coercion { ground; coercion } ->
+            let ground = self#option self#core_type ctx ground in
+            let coercion = self#core_type ctx coercion in
+            ( Pvc_coercion
+                { ground = Stdlib.fst ground; coercion = Stdlib.fst coercion },
+              self#record ctx
+                [
+                  ("ground", Stdlib.snd ground);
+                  ("coercion", Stdlib.snd coercion);
+                ] )
+
     method value_binding : 'ctx -> value_binding -> value_binding * 'res =
-      fun ctx { pvb_pat; pvb_expr; pvb_attributes; pvb_loc } ->
+      fun ctx { pvb_pat; pvb_expr; pvb_constraint; pvb_attributes; pvb_loc } ->
         let pvb_pat = self#pattern ctx pvb_pat in
         let pvb_expr = self#expression ctx pvb_expr in
+        let pvb_constraint =
+          self#option self#value_constraint ctx pvb_constraint
+        in
         let pvb_attributes = self#attributes ctx pvb_attributes in
         let pvb_loc = self#location ctx pvb_loc in
         ( {
             pvb_pat = Stdlib.fst pvb_pat;
             pvb_expr = Stdlib.fst pvb_expr;
+            pvb_constraint = Stdlib.fst pvb_constraint;
             pvb_attributes = Stdlib.fst pvb_attributes;
             pvb_loc = Stdlib.fst pvb_loc;
           },

@@ -17,7 +17,7 @@
 open Stdlib0
 module Location = Astlib.Location
 module Longident = Astlib.Longident
-open Astlib.Ast_500
+open Astlib.Ast_501
 
 [@@@warning "-9"]
 
@@ -423,8 +423,14 @@ module Incl = struct
 end
 
 module Vb = struct
-  let mk ?(loc = !default_loc) ?(attrs = []) pat expr =
-    { pvb_pat = pat; pvb_expr = expr; pvb_attributes = attrs; pvb_loc = loc }
+  let mk ?(loc = !default_loc) ?(attrs = []) ?value_constraint pat expr =
+    {
+      pvb_pat = pat;
+      pvb_expr = expr;
+      pvb_constraint = value_constraint;
+      pvb_attributes = attrs;
+      pvb_loc = loc;
+    }
 end
 
 module Ci = struct

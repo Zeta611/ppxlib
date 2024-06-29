@@ -21,7 +21,7 @@
 (* Extensive Rewrite: Hongbo Zhang: University of Pennsylvania *)
 (* TODO more fine-grained precedence pretty-printing *)
 
-open Ast_414
+open Ast_501
 open Asttypes
 open Format
 open Location
@@ -1039,6 +1039,7 @@ and class_field ctxt f x =
                 ppat_attributes = [];
               };
             pvb_expr = e;
+            pvb_constraint = None;
             pvb_attributes = [];
             pvb_loc = Location.none;
           }

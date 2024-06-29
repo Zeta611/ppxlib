@@ -3,8 +3,8 @@ module From = Ast_501
 module To = Ast_502
 
 let migration_error loc missing_feature =
-  Location.raise_errorf ~loc
-    "migration error: %s is not supported in OCaml 5.2" missing_feature
+  Location.raise_errorf ~loc "migration error: %s is not supported in OCaml 5.2"
+    missing_feature
 
 (** Look for a particular attribute and remove it from the list. Attributes are
     used to make certain migrations round-trip. Returns [None] if the specified

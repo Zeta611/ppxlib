@@ -15,7 +15,7 @@
 
 (** Copy of Ast_helper from OCaml 4.14 with docstring related stuff removed *)
 
-open Astlib.Ast_500
+open Astlib.Ast_501
 open Asttypes
 open Parsetree
 
@@ -466,7 +466,13 @@ end
 
 (** Value bindings *)
 module Vb : sig
-  val mk : ?loc:loc -> ?attrs:attrs -> pattern -> expression -> value_binding
+  val mk :
+    ?loc:loc ->
+    ?attrs:attrs ->
+    ?value_constraint:value_constraint ->
+    pattern ->
+    expression ->
+    value_binding
 end
 
 (** {1 Class language} *)
