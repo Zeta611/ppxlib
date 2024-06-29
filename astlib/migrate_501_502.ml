@@ -2,6 +2,10 @@ open Stdlib0
 module From = Ast_501
 module To = Ast_502
 
+let migration_error loc missing_feature =
+  Location.raise_errorf ~loc
+    "migration error: %s is not supported in OCaml 5.2" missing_feature
+
 (** Look for a particular attribute and remove it from the list. Attributes are
     used to make certain migrations round-trip. Returns [None] if the specified
     attribute is not found. *)
@@ -425,6 +429,8 @@ and copy_pattern_desc :
         (copy_loc (fun x -> Option.map (fun x -> x) x) x0)
   | Ast_501.Parsetree.Ppat_exception x0 ->
       Ast_502.Parsetree.Ppat_exception (copy_pattern x0)
+  | Ast_501.Parsetree.Ppat_effect (x0, _x1) ->
+      migration_error x0.Ast_501.Parsetree.ppat_loc "effect pattern"
   | Ast_501.Parsetree.Ppat_extension x0 ->
       Ast_502.Parsetree.Ppat_extension (copy_extension x0)
   | Ast_501.Parsetree.Ppat_open (x0, x1) ->
@@ -605,6 +611,8 @@ and copy_structure_item_desc :
       Ast_502.Parsetree.Pstr_typext (copy_type_extension x0)
   | Ast_501.Parsetree.Pstr_exception x0 ->
       Ast_502.Parsetree.Pstr_exception (copy_type_exception x0)
+  | Ast_501.Parsetree.Pstr_effect x0 ->
+      migration_error x0.Ast_501.Parsetree.peff_loc "effect structure"
   | Ast_501.Parsetree.Pstr_module x0 ->
       Ast_502.Parsetree.Pstr_module (copy_module_binding x0)
   | Ast_501.Parsetree.Pstr_recmodule x0 ->
@@ -879,6 +887,8 @@ and copy_signature_item_desc :
       Ast_502.Parsetree.Psig_typext (copy_type_extension x0)
   | Ast_501.Parsetree.Psig_exception x0 ->
       Ast_502.Parsetree.Psig_exception (copy_type_exception x0)
+  | Ast_501.Parsetree.Psig_effect x0 ->
+      migration_error x0.Ast_501.Parsetree.peff_loc "effect signature"
   | Ast_501.Parsetree.Psig_module x0 ->
       Ast_502.Parsetree.Psig_module (copy_module_declaration x0)
   | Ast_501.Parsetree.Psig_modsubst x0 ->
